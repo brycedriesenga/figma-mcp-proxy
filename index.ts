@@ -11,6 +11,12 @@ const HOP_BY_HOP_HEADERS = new Set([
   "content-length",
 ]);
 
+const OAUTH_DISCOVERY_ROUTES = new Set([
+  "/.well-known/oauth-protected-resource",
+  "/.well-known/oauth-authorization-server",
+  "/.well-known/openid-configuration",
+]);
+
 type HeaderMap = Record<string, string>;
 
 interface Config {
@@ -80,7 +86,7 @@ function buildConfig(): Config {
   };
 }
 
-function isHandshakeRequest(request: Request): boolean {
+function isSseHandshakeRequest(request: Request): boolean {
   const accept = request.headers.get("accept") ?? "";
   const contentType = request.headers.get("content-type") ?? "";
   const url = new URL(request.url);
@@ -90,6 +96,15 @@ function isHandshakeRequest(request: Request): boolean {
     (accept.includes("text/event-stream") || accept.includes("text/plain")) &&
     (url.pathname.includes("sse") || url.searchParams.get("transport") === "sse" || url.searchParams.get("mode") === "sse" || contentType.includes("text/event-stream"))
   );
+}
+
+function isInitialPostRequest(request: Request): boolean {
+  const url = new URL(request.url);
+  return request.method === "POST" && (url.pathname === "/" || url.pathname === "");
+}
+
+function shouldApplyHandshakeHeaders(request: Request): boolean {
+  return isSseHandshakeRequest(request) || isInitialPostRequest(request);
 }
 
 function copyRequestHeaders(request: Request): Headers {
@@ -115,7 +130,11 @@ function buildUpstreamUrl(request: Request, upstreamBase: URL): URL {
   const basePath = target.pathname || "/";
   const incomingPath = incoming.pathname || "/";
 
-  if (basePath === "/") {
+  // OAuth discovery routes are forwarded to the upstream root, stripping any
+  // path prefix (e.g. /mcp) so that https://mcp.figma.com resolves them at /.
+  if (OAUTH_DISCOVERY_ROUTES.has(incomingPath)) {
+    target.pathname = incomingPath;
+  } else if (basePath === "/") {
     target.pathname = incomingPath;
   } else if (incomingPath === basePath) {
     target.pathname = basePath;
@@ -153,7 +172,7 @@ async function proxyRequest(request: Request, config: Config): Promise<Response>
   const headers = copyRequestHeaders(request);
   mergeHeaders(headers, config.upstreamHeaders);
 
-  if (isHandshakeRequest(request)) {
+  if (shouldApplyHandshakeHeaders(request)) {
     mergeHeaders(headers, config.handshakeHeaders);
   }
 
