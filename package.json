@@ -1,0 +1,9 @@
+{
+  "name": "mcp-sse-proxy",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch index.ts",
+    "start": "bun index.ts"
+  }
+}
