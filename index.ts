@@ -227,7 +227,22 @@ Bun.serve({
       return new Response(null, { status: 204, headers: cors });
     }
 
-    if (request.method === "GET" && url.pathname === "/") {
+    if (request.method === "GET") {
+      if (isSseHandshakeRequest(request) || OAUTH_DISCOVERY_ROUTES.has(url.pathname)) {
+        try {
+          return await proxyRequest(request, config);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Unknown proxy error";
+          return new Response(JSON.stringify({ error: message }), {
+            status: 502,
+            headers: {
+              "content-type": "application/json",
+              ...Object.fromEntries(cors.entries()),
+            },
+          });
+        }
+      }
+
       return healthResponse(config);
     }
 
