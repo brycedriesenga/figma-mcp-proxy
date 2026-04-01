@@ -103,7 +103,7 @@ function isInitialPostRequest(request: Request): boolean {
   return request.method === "POST" && (url.pathname === "/" || url.pathname === "");
 }
 
-function shouldApplyHandshakeHeaders(request: Request): boolean {
+function isHandshakeRequest(request: Request): boolean {
   return isSseHandshakeRequest(request) || isInitialPostRequest(request);
 }
 
@@ -131,7 +131,7 @@ function buildUpstreamUrl(request: Request, upstreamBase: URL): URL {
   const incomingPath = incoming.pathname || "/";
 
   // OAuth discovery routes are forwarded to the upstream root, stripping any
-  // path prefix (e.g. /mcp) so that https://mcp.figma.com resolves them at /.
+  // /mcp-style path prefix so that https://mcp.figma.com resolves them at /.
   if (OAUTH_DISCOVERY_ROUTES.has(incomingPath)) {
     target.pathname = incomingPath;
   } else if (basePath === "/") {
@@ -171,10 +171,7 @@ async function proxyRequest(request: Request, config: Config): Promise<Response>
   const upstreamUrl = buildUpstreamUrl(request, config.upstreamUrl);
   const headers = copyRequestHeaders(request);
   mergeHeaders(headers, config.upstreamHeaders);
-
-  if (shouldApplyHandshakeHeaders(request)) {
-    mergeHeaders(headers, config.handshakeHeaders);
-  }
+  mergeHeaders(headers, config.handshakeHeaders);
 
   const init: RequestInit = {
     method: request.method,
@@ -193,11 +190,24 @@ async function proxyRequest(request: Request, config: Config): Promise<Response>
     responseHeaders.set(key, value);
   }
 
+  if (isHandshakeRequest(request)) {
+    const contentType = responseHeaders.get("content-type");
+    if (!contentType || !contentType.toLowerCase().includes("text/event-stream")) {
+      responseHeaders.set("content-type", "text/event-stream");
+    }
+  }
+
   return new Response(upstreamResponse.body, {
     status: upstreamResponse.status,
     statusText: upstreamResponse.statusText,
     headers: responseHeaders,
   });
+}
+
+function healthResponse(config: Config): Response {
+  const headers = corsHeaders(config);
+  headers.set("content-type", "application/json; charset=utf-8");
+  return new Response("{}", { status: 200, headers });
 }
 
 const config = buildConfig();
@@ -210,10 +220,15 @@ Bun.serve({
   hostname: config.listenHost,
   port: config.listenPort,
   fetch: async (request) => {
+    const url = new URL(request.url);
     const cors = corsHeaders(config);
 
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: cors });
+    }
+
+    if (request.method === "GET" && url.pathname === "/") {
+      return healthResponse(config);
     }
 
     try {
